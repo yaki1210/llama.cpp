@@ -314,6 +314,79 @@ int32_t mtmd_helper_decode_image_chunk(
     return 0;
 }
 
+int32_t mtmd_helper_decode_image_chunk_with_crop(
+        mtmd_context * ctx,
+        struct llama_context * lctx,
+        const mtmd_input_chunk * chunk,
+        float * encoded_embd,
+        llama_pos n_past,
+        llama_seq_id seq_id,
+        int32_t n_batch,
+        uint32_t crop_nx,
+        uint32_t crop_ny,
+        llama_pos * new_n_past) {
+    GGML_ASSERT(n_batch > 0);
+    auto chunk_type = mtmd_input_chunk_get_type(chunk);
+    if (chunk_type != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+        LOG_ERR("failed to decode chunk: input chunk not of image type\n");
+        return -1;
+    }
+
+    const llama_model * model = llama_get_model(lctx);
+    int n_mmproj_embd = llama_model_n_embd_inp(model);
+    int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
+
+    int32_t n_tokens = crop_nx * crop_ny;
+    int32_t i_batch = 0;
+    int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
+    decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
+
+    if (mtmd_decode_use_mrope(ctx)) {
+        // M-RoPE: use crop_nx as row width, positions start from n_past
+        std::vector<mtmd_decoder_pos> rel_pos(n_tokens);
+        for (int i = 0; i < n_tokens; i++) {
+            rel_pos[i].t = n_past;
+            rel_pos[i].x = n_past + (i % crop_nx);
+            rel_pos[i].y = n_past + (i / crop_nx);
+            rel_pos[i].z = 0;
+        }
+        batch_embd.set_position_mrope_2d(rel_pos, seq_id);
+    } else {
+        batch_embd.set_position_normal(n_past, seq_id);
+    }
+
+    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
+    if (use_non_causal) {
+        llama_set_causal_attn(lctx, false);
+    }
+
+    while (i_batch < n_img_batches) {
+        int pos_offset = i_batch * n_batch;
+        int n_tokens_batch = std::min(n_batch, n_tokens - pos_offset);
+        llama_batch batch_embd_view = batch_embd.get_view(pos_offset, n_tokens_batch);
+
+        LOG_INF("decoding image crop batch %d/%d, n_tokens_batch = %d\n", i_batch+1, n_img_batches, n_tokens_batch);
+
+        int64_t t1 = ggml_time_ms();
+        int32_t ret = llama_decode(lctx, batch_embd_view);
+        if (ret != 0) {
+            LOG_ERR("failed to decode image crop\n");
+            llama_set_causal_attn(lctx, true);
+            return ret;
+        }
+
+        LOG_INF("image crop decoded (batch %d/%d) in %" PRId64 " ms\n", i_batch+1, n_img_batches, ggml_time_ms() - t1);
+        i_batch++;
+    }
+
+    *new_n_past = n_past + std::max((int32_t)crop_nx, (int32_t)crop_ny);
+
+    if (use_non_causal) {
+        llama_set_causal_attn(lctx, true);
+    }
+    return 0;
+}
+
 int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         struct llama_context * lctx,
         const mtmd_input_chunk * chunk,
@@ -373,7 +446,48 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+
+        // === Seeless: sparse crop ===
+        float * final_embd = embd;
+        std::vector<float> crop_embd_storage;
+
+        auto image_tokens = chunk->tokens_image.get();
+        if (image_tokens && image_tokens->has_focus_box()) {
+            int n_mmproj_embd = llama_model_n_embd_inp(llama_get_model(lctx));
+            uint32_t orig_nx  = image_tokens->nx;
+            uint32_t crop_nx  = image_tokens->crop_nx;
+            uint32_t crop_ny  = image_tokens->crop_ny;
+            int row_start     = image_tokens->crop_row_start;
+            int col_start     = image_tokens->crop_col_start;
+            int crop_n_tokens = crop_nx * crop_ny;
+
+            crop_embd_storage.resize(crop_n_tokens * n_mmproj_embd);
+
+            for (uint32_t r = 0; r < crop_ny; r++) {
+                for (uint32_t c = 0; c < crop_nx; c++) {
+                    int orig_idx = (row_start + r) * orig_nx + (col_start + c);
+                    int crop_idx = r * crop_nx + c;
+                    memcpy(
+                        crop_embd_storage.data() + crop_idx * n_mmproj_embd,
+                        embd + orig_idx * n_mmproj_embd,
+                        n_mmproj_embd * sizeof(float)
+                    );
+                }
+            }
+            final_embd = crop_embd_storage.data();
+            LOG_INF("sparse crop: %d tokens -> %d tokens (%.1f%% reduction)\n",
+                    orig_nx * image_tokens->ny, crop_n_tokens,
+                    100.0 * (1.0 - (float)crop_n_tokens / (orig_nx * image_tokens->ny)));
+        }
+
+        if (image_tokens && image_tokens->has_focus_box()) {
+            ret = mtmd_helper_decode_image_chunk_with_crop(
+                ctx, lctx, chunk, final_embd, n_past, seq_id, n_batch,
+                image_tokens->crop_nx, image_tokens->crop_ny, new_n_past);
+        } else {
+            ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, final_embd, n_past, seq_id, n_batch, new_n_past);
+        }
+        // === END Seeless ===
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);

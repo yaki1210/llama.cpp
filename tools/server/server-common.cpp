@@ -713,16 +713,23 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files, const std::vector<media_focus_box> & focus_boxes) {
     mtmd::bitmaps bitmaps;
-    for (auto & file : files) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
+    for (size_t i = 0; i < files.size(); i++) {
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, files[i].data(), files[i].size()));
         if (!bmp.ptr) {
             throw std::runtime_error("Failed to load image or audio file");
         }
         // calculate bitmap hash (for KV caching)
         std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
         bmp.set_id(hash.c_str());
+        // Seeless: set focus_box on bitmap
+        for (const auto & fb : focus_boxes) {
+            if (fb.file_index == (int)i) {
+                mtmd_bitmap_set_focus_box(bmp.ptr, fb.left, fb.top, fb.width, fb.height);
+                break;
+            }
+        }
         bitmaps.entries.push_back(std::move(bmp));
     }
     // process prompt
@@ -911,7 +918,8 @@ static void handle_media(
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files)
+    std::vector<raw_buffer> & out_files,
+    std::vector<media_focus_box> & out_focus_boxes)
 {
     json llama_params;
 
@@ -996,7 +1004,19 @@ json oaicompat_chat_params_parse(
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
+                // Seeless: parse focus_box
+                int fb[4] = {-1, -1, -1, -1};
+                if (image_url.contains("focus_box")) {
+                    auto fb_json = image_url["focus_box"];
+                    if (fb_json.is_array() && fb_json.size() == 4) {
+                        for (int i = 0; i < 4; i++) fb[i] = fb_json[i].get<int>();
+                    }
+                }
                 handle_media(out_files, image_url, opt.media_path);
+                // Seeless: record focus_box
+                if (fb[0] >= 0) {
+                    out_focus_boxes.push_back({(int)out_files.size() - 1, fb[0], fb[1], fb[2], fb[3]});
+                }
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();

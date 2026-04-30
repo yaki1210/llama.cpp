@@ -147,6 +147,8 @@ MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
+// Seeless: set focus box for sparse cropping
+MTMD_API void mtmd_bitmap_set_focus_box(mtmd_bitmap * bmp, int left, int top, int width, int height);
 
 
 // mtmd_input_chunks

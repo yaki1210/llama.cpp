@@ -17,6 +17,7 @@
 #endif
 
 #include <algorithm>
+#include <cmath>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -31,6 +32,7 @@ struct mtmd_bitmap {
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+    int focus_box[4] = {-1, -1, -1, -1}; // pixel coordinates (left, top, width, height), -1 = not set
 };
 
 // position indexing for decoder model
@@ -45,7 +47,24 @@ struct mtmd_image_tokens {
     uint32_t ny; // number of tokens in y direction
     mtmd_pos_type pos = MTMD_POS_TYPE_NORMAL;
     uint32_t image_idx = 0; // 0-based position of this image among image chunks in the prompt(used by pos == MTMD_POS_TYPE_HUNYUANVL)
+
+    // Seeless: sparse crop fields
+    int focus_box[4] = {-1, -1, -1, -1};  // pixel coordinates
+    int crop_row_start = -1;               // crop region row start in original grid
+    int crop_col_start = -1;               // crop region col start in original grid
+    uint32_t crop_nx = 0;                  // patch columns after cropping
+    uint32_t crop_ny = 0;                  // patch rows after cropping
+    uint32_t orig_img_nx = 0;             // original image width (for coordinate mapping)
+    uint32_t orig_img_ny = 0;             // original image height
+
+    bool has_focus_box() const {
+        return focus_box[0] >= 0 && crop_nx > 0 && crop_ny > 0;
+    }
+
     uint32_t n_tokens() const {
+        if (has_focus_box()) {
+            return crop_nx * crop_ny;
+        }
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
@@ -61,6 +80,13 @@ struct mtmd_image_tokens {
             ny,
             pos,
             image_idx,
+            {focus_box[0], focus_box[1], focus_box[2], focus_box[3]},
+            crop_row_start,
+            crop_col_start,
+            crop_nx,
+            crop_ny,
+            orig_img_nx,
+            orig_img_ny,
             batch_f32.clone(),
             id
         };
@@ -839,6 +865,61 @@ struct mtmd_tokenizer {
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
                 }
+
+                // === Seeless: focus_box coordinate mapping ===
+                if (bitmap->focus_box[0] >= 0 && mtmd_decode_use_mrope(ctx)) {
+                    image_tokens->orig_img_nx = bitmap->nx;
+                    image_tokens->orig_img_ny = bitmap->ny;
+                    memcpy(image_tokens->focus_box, bitmap->focus_box, 4 * sizeof(int));
+
+                    // preprocessed image size
+                    int prep_nx = (int)batch_f32.entries[0]->nx;
+                    int prep_ny = (int)batch_f32.entries[0]->ny;
+
+                    // scale factors
+                    float scale_x = (float)prep_nx / bitmap->nx;
+                    float scale_y = (float)prep_ny / bitmap->ny;
+
+                    // scale focus_box to preprocessed coordinates
+                    float fb_x = bitmap->focus_box[0] * scale_x;
+                    float fb_y = bitmap->focus_box[1] * scale_y;
+                    float fb_w = bitmap->focus_box[2] * scale_x;
+                    float fb_h = bitmap->focus_box[3] * scale_y;
+
+                    // pixels per token = patch_size * spatial_merge_size
+                    int patch_size = clip_get_patch_size(ctx->ctx_v);
+                    int tps = patch_size * 2; // Qwen2VL/2.5VL/3VL/3.5 all use merge_size=2
+
+                    int x_patch = prep_nx / tps;
+                    int y_patch = prep_ny / tps;
+
+                    int col_start = std::max(0, (int)std::floor(fb_x / tps));
+                    int col_end   = std::min(x_patch - 1, (int)std::ceil((fb_x + fb_w) / tps) - 1);
+                    int row_start = std::max(0, (int)std::floor(fb_y / tps));
+                    int row_end   = std::min(y_patch - 1, (int)std::ceil((fb_y + fb_h) / tps) - 1);
+
+                    if (col_end < col_start) col_end = col_start;
+                    if (row_end < row_start) row_end = row_start;
+
+                    image_tokens->crop_col_start = col_start;
+                    image_tokens->crop_row_start = row_start;
+                    image_tokens->crop_nx = col_end - col_start + 1;
+                    image_tokens->crop_ny = row_end - row_start + 1;
+
+                    // if crop covers the full image, skip cropping
+                    if (image_tokens->crop_nx >= (uint32_t)x_patch &&
+                        image_tokens->crop_ny >= (uint32_t)y_patch) {
+                        image_tokens->focus_box[0] = -1;
+                    }
+
+                    LOG_INF("focus_box: [%d,%d,%d,%d] -> crop [%d:%d, %d:%d] -> %dx%d tokens\n",
+                            bitmap->focus_box[0], bitmap->focus_box[1],
+                            bitmap->focus_box[2], bitmap->focus_box[3],
+                            row_start, row_end, col_start, col_end,
+                            image_tokens->crop_ny, image_tokens->crop_nx);
+                }
+                // === END Seeless ===
+
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmap->id; // optional
 
@@ -1168,6 +1249,14 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     }
 }
 
+void mtmd_bitmap_set_focus_box(mtmd_bitmap * bmp, int left, int top, int width, int height) {
+    if (!bmp) return;
+    bmp->focus_box[0] = left;
+    bmp->focus_box[1] = top;
+    bmp->focus_box[2] = width;
+    bmp->focus_box[3] = height;
+}
+
 void mtmd_bitmap_free(mtmd_bitmap * bitmap) {
     if (bitmap) {
         delete bitmap;
@@ -1297,9 +1386,13 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
     switch (image_tokens->pos) {
         case MTMD_POS_TYPE_MROPE:
             {
+                uint32_t nx = image_tokens->nx;
+                if (image_tokens->has_focus_box()) {
+                    nx = image_tokens->crop_nx;
+                }
                 pos.t = pos_0;
-                pos.x = pos_0 + (i % image_tokens->nx);
-                pos.y = pos_0 + (i / image_tokens->nx);
+                pos.x = pos_0 + (i % nx);
+                pos.y = pos_0 + (i / nx);
                 pos.z = 0; // unused for now
             } break;
         case MTMD_POS_TYPE_NORMAL:
@@ -1354,6 +1447,9 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     switch (image_tokens->pos) {
         case MTMD_POS_TYPE_MROPE:
+            if (image_tokens->has_focus_box()) {
+                return std::max(image_tokens->crop_nx, image_tokens->crop_ny);
+            }
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
             return image_tokens->n_tokens();

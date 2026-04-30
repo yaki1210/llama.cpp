@@ -29,6 +29,12 @@ using json = nlohmann::ordered_json;
 
 using raw_buffer = std::vector<uint8_t>;
 
+// Seeless: focus box metadata for sparse crop
+struct media_focus_box {
+    int file_index;                    // 对应 out_files 中的索引
+    int left, top, width, height;      // 像素坐标
+};
+
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value
@@ -256,7 +262,7 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files, const std::vector<media_focus_box> & focus_boxes = {});
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -305,7 +311,8 @@ json oaicompat_completion_params_parse(const json & body);
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    std::vector<media_focus_box> & out_focus_boxes);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(

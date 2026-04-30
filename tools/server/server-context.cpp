@@ -3187,7 +3187,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             server_task_type type,
             const json & data,
             const std::vector<raw_buffer> & files,
-            task_response_type res_type) {
+            task_response_type res_type,
+            const std::vector<media_focus_box> & focus_boxes) {
     GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
     auto res = create_response();
@@ -3206,7 +3207,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
         if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
             // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
-            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files, focus_boxes));
         } else {
             // Everything else, including multimodal completions.
             inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
@@ -3779,35 +3780,41 @@ void server_routes::init_routes() {
     this->post_chat_completions = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<media_focus_box> focus_boxes;
         json body = json::parse(req.body);
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            TASK_RESPONSE_TYPE_OAI_CHAT);
+            TASK_RESPONSE_TYPE_OAI_CHAT,
+            focus_boxes);
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<media_focus_box> focus_boxes;
         json body = server_chat_convert_responses_to_chatcmpl(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            TASK_RESPONSE_TYPE_OAI_RESP);
+            TASK_RESPONSE_TYPE_OAI_RESP,
+            focus_boxes);
     };
 
     this->post_transcriptions_oai = [this](const server_http_req & req) {
@@ -3819,6 +3826,7 @@ void server_routes::init_routes() {
         }
 
         std::vector<raw_buffer> files;
+        std::vector<media_focus_box> focus_boxes;
         json body = convert_transcriptions_to_chatcmpl(
             json::parse(req.body),
             meta->chat_params.tmpls.get(),
@@ -3829,43 +3837,50 @@ void server_routes::init_routes() {
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            TASK_RESPONSE_TYPE_OAI_ASR);
+            TASK_RESPONSE_TYPE_OAI_ASR,
+            focus_boxes);
     };
 
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<media_focus_box> focus_boxes;
         json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
         return handle_completions_impl(
             req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            TASK_RESPONSE_TYPE_ANTHROPIC);
+            TASK_RESPONSE_TYPE_ANTHROPIC,
+            focus_boxes);
     };
 
     this->post_anthropic_count_tokens = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
+        std::vector<media_focus_box> focus_boxes;
         json body = server_chat_convert_anthropic_to_oai(json::parse(req.body));
         SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
 
         json prompt = body_parsed.at("prompt");
         llama_tokens tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true);
@@ -3877,11 +3892,13 @@ void server_routes::init_routes() {
     this->post_apply_template = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files; // dummy, unused
+        std::vector<media_focus_box> focus_boxes; // dummy, unused
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
-            files);
+            files,
+            focus_boxes);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;
     };

@@ -1,0 +1,49 @@
+name: Build Seeless llama-server (Windows CUDA 13.1)
+
+on:
+  push:
+    branches: [seeless]
+  workflow_dispatch:
+
+jobs:
+  windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CUDA 13.1
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: '13.1'
+
+      - name: Build
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_CUDA=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+          cmake --build build --config Release
+        shell: cmd
+
+      - name: Pack artifacts
+        run: |
+          mkdir artifact
+          copy build\bin\Release\llama-server.exe artifact\
+          copy build\bin\Release\ggml-cuda.dll artifact\
+          copy build\bin\Release\ggml-cpu.dll artifact\
+          copy build\src\Release\ggml-base.dll artifact\
+          robocopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin" artifact cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a seeless-llama-server-win-cuda13.1-x64.zip .\artifact\*
+        shell: cmd
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seeless-llama-server-win-cuda13.1-x64
+          path: seeless-llama-server-win-cuda13.1-x64.zip

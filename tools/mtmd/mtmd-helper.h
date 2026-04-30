@@ -89,6 +89,20 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+// Seeless: decode image chunk with sparse crop
+// Similar to mtmd_helper_decode_image_chunk, but uses crop_nx/crop_ny instead of image_tokens->nx/ny
+MTMD_API int32_t mtmd_helper_decode_image_chunk_with_crop(
+    mtmd_context * ctx,
+    struct llama_context * lctx,
+    const mtmd_input_chunk * chunk,
+    float * encoded_embd,
+    llama_pos n_past,
+    llama_seq_id seq_id,
+    int32_t n_batch,
+    uint32_t crop_nx,
+    uint32_t crop_ny,
+    llama_pos * new_n_past);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif
