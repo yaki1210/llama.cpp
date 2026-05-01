@@ -150,6 +150,17 @@ MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
 // Seeless: set focus box for sparse cropping
 MTMD_API void mtmd_bitmap_set_focus_box(mtmd_bitmap * bmp, int left, int top, int width, int height);
 
+// Seeless: check if chunk has focus_box set
+MTMD_API bool mtmd_input_chunk_has_focus_box(const mtmd_input_chunk * chunk);
+
+// Seeless: get crop parameters from chunk
+MTMD_API uint32_t mtmd_input_chunk_get_crop_nx(const mtmd_input_chunk * chunk);
+MTMD_API uint32_t mtmd_input_chunk_get_crop_ny(const mtmd_input_chunk * chunk);
+MTMD_API int mtmd_input_chunk_get_crop_row_start(const mtmd_input_chunk * chunk);
+MTMD_API int mtmd_input_chunk_get_crop_col_start(const mtmd_input_chunk * chunk);
+MTMD_API uint32_t mtmd_input_chunk_get_orig_nx(const mtmd_input_chunk * chunk);
+MTMD_API uint32_t mtmd_input_chunk_get_orig_ny(const mtmd_input_chunk * chunk);
+
 
 // mtmd_input_chunks
 //

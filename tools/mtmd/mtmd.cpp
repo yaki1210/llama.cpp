@@ -1257,6 +1257,44 @@ void mtmd_bitmap_set_focus_box(mtmd_bitmap * bmp, int left, int top, int width, 
     bmp->focus_box[3] = height;
 }
 
+// Seeless: accessors for sparse crop parameters
+bool mtmd_input_chunk_has_focus_box(const mtmd_input_chunk * chunk) {
+    if (!chunk || chunk->type != MTMD_INPUT_CHUNK_TYPE_IMAGE || !chunk->tokens_image) {
+        return false;
+    }
+    return chunk->tokens_image->has_focus_box();
+}
+
+uint32_t mtmd_input_chunk_get_crop_nx(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return 0;
+    return chunk->tokens_image->crop_nx;
+}
+
+uint32_t mtmd_input_chunk_get_crop_ny(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return 0;
+    return chunk->tokens_image->crop_ny;
+}
+
+int mtmd_input_chunk_get_crop_row_start(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return -1;
+    return chunk->tokens_image->crop_row_start;
+}
+
+int mtmd_input_chunk_get_crop_col_start(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return -1;
+    return chunk->tokens_image->crop_col_start;
+}
+
+uint32_t mtmd_input_chunk_get_orig_nx(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return 0;
+    return chunk->tokens_image->nx;
+}
+
+uint32_t mtmd_input_chunk_get_orig_ny(const mtmd_input_chunk * chunk) {
+    if (!chunk || !chunk->tokens_image) return 0;
+    return chunk->tokens_image->ny;
+}
+
 void mtmd_bitmap_free(mtmd_bitmap * bitmap) {
     if (bitmap) {
         delete bitmap;

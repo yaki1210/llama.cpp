@@ -451,14 +451,15 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         float * final_embd = embd;
         std::vector<float> crop_embd_storage;
 
-        auto image_tokens = chunk->tokens_image.get();
-        if (image_tokens && image_tokens->has_focus_box()) {
+        bool has_fb = mtmd_input_chunk_has_focus_box(chunk);
+        if (has_fb) {
             int n_mmproj_embd = llama_model_n_embd_inp(llama_get_model(lctx));
-            uint32_t orig_nx  = image_tokens->nx;
-            uint32_t crop_nx  = image_tokens->crop_nx;
-            uint32_t crop_ny  = image_tokens->crop_ny;
-            int row_start     = image_tokens->crop_row_start;
-            int col_start     = image_tokens->crop_col_start;
+            uint32_t orig_nx  = mtmd_input_chunk_get_orig_nx(chunk);
+            uint32_t orig_ny  = mtmd_input_chunk_get_orig_ny(chunk);
+            uint32_t crop_nx  = mtmd_input_chunk_get_crop_nx(chunk);
+            uint32_t crop_ny  = mtmd_input_chunk_get_crop_ny(chunk);
+            int row_start     = mtmd_input_chunk_get_crop_row_start(chunk);
+            int col_start     = mtmd_input_chunk_get_crop_col_start(chunk);
             int crop_n_tokens = crop_nx * crop_ny;
 
             crop_embd_storage.resize(crop_n_tokens * n_mmproj_embd);
@@ -476,14 +477,14 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             }
             final_embd = crop_embd_storage.data();
             LOG_INF("sparse crop: %d tokens -> %d tokens (%.1f%% reduction)\n",
-                    orig_nx * image_tokens->ny, crop_n_tokens,
-                    100.0 * (1.0 - (float)crop_n_tokens / (orig_nx * image_tokens->ny)));
+                    orig_nx * orig_ny, crop_n_tokens,
+                    100.0 * (1.0 - (float)crop_n_tokens / (orig_nx * orig_ny)));
         }
 
-        if (image_tokens && image_tokens->has_focus_box()) {
+        if (has_fb) {
             ret = mtmd_helper_decode_image_chunk_with_crop(
                 ctx, lctx, chunk, final_embd, n_past, seq_id, n_batch,
-                image_tokens->crop_nx, image_tokens->crop_ny, new_n_past);
+                mtmd_input_chunk_get_crop_nx(chunk), mtmd_input_chunk_get_crop_ny(chunk), new_n_past);
         } else {
             ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, final_embd, n_past, seq_id, n_batch, new_n_past);
         }
