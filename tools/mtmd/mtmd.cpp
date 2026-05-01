@@ -1122,7 +1122,9 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     }
     auto proj_type = clip_get_projector_type(ctx_clip);
     int n_mmproj_embd = clip_n_mmproj_embd(ctx_clip);
-    ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
+    // Seeless: always allocate for full image tokens, since clip_image_batch_encode outputs full embeddings
+    size_t full_n_tokens = (size_t)image_tokens->nx * image_tokens->ny;
+    ctx->image_embd_v.resize(full_n_tokens * n_mmproj_embd);
     bool ok = false;
 
     if (clip_is_llava(ctx_clip)
