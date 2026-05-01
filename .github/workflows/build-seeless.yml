@@ -33,15 +33,20 @@ jobs:
         shell: cmd
 
       - name: Pack artifacts
+        shell: pwsh
         run: |
           mkdir artifact
-          copy build\bin\Release\llama-server.exe artifact\
-          copy build\bin\Release\ggml-cuda.dll artifact\
-          copy build\bin\Release\ggml-cpu.dll artifact\
-          copy build\src\Release\ggml-base.dll artifact\
-          robocopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin" artifact cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          # All EXE and DLL from the build output directory
+          Copy-Item .\build\bin\Release\*.exe .\artifact\
+          Copy-Item .\build\bin\Release\*.dll .\artifact\
+          # CUDA runtime DLLs
+          $cudaPath = $env:CUDA_PATH
+          Write-Host "CUDA_PATH: $cudaPath"
+          $dst = '.\artifact'
+          robocopy "$cudaPath\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "$cudaPath\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "$cudaPath\bin\x64" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           7z a seeless-llama-server-win-cuda13.1-x64.zip .\artifact\*
-        shell: cmd
 
       - uses: actions/upload-artifact@v4
         with:
