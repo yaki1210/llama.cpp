@@ -726,7 +726,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
         // Seeless: set focus_box on bitmap
         for (const auto & fb : focus_boxes) {
             if (fb.file_index == (int)i) {
-                mtmd_bitmap_set_focus_box(bmp.ptr, fb.left, fb.top, fb.width, fb.height);
+                mtmd_bitmap_set_focus_box(bmp.ptr.get(), fb.left, fb.top, fb.width, fb.height);
                 break;
             }
         }
